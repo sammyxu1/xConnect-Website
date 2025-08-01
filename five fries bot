@@ -1,1 +1,147 @@
+import discord
+from discord.ext import commands
+from discord import app_commands
+import asyncio
+
+intents = discord.Intents.all()
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+# Role ID for moderation commands
+MOD_ROLE_ID = 1400815255373873162  # replace with your actual mod role ID
+
+warn_db = {}
+
+@bot.event
+async def on_ready():
+    await bot.tree.sync()
+    print(f"Logged in as {bot.user}")
+
+def has_mod_role():
+    async def predicate(interaction: discord.Interaction):
+        return any(role.id == MOD_ROLE_ID for role in interaction.user.roles)
+    return app_commands.check(predicate)
+
+# /ban command
+@bot.tree.command(name="ban", description="Bans a user from the server.")
+@has_mod_role()
+async def ban(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
+    await member.ban(reason=reason)
+    await interaction.response.send_message(f"{member} has been banned. Reason: {reason}", ephemeral=True)
+
+# /kick command
+@bot.tree.command(name="kick", description="Kicks a user from the server.")
+@has_mod_role()
+async def kick(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
+    await member.kick(reason=reason)
+    await interaction.response.send_message(f"{member} has been kicked. Reason: {reason}", ephemeral=True)
+
+# /warn command
+@bot.tree.command(name="warn", description="Warn a user.")
+@has_mod_role()
+async def warn(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
+    if member.id not in warn_db:
+        warn_db[member.id] = []
+    warn_db[member.id].append(reason)
+    await interaction.response.send_message(f"{member.mention} has been warned. Reason: {reason}", ephemeral=True)
+
+# /checkwarnings
+@bot.tree.command(name="checkwarnings", description="Check warnings for a user.")
+@has_mod_role()
+async def checkwarnings(interaction: discord.Interaction, member: discord.Member):
+    warnings = warn_db.get(member.id, [])
+    if not warnings:
+        await interaction.response.send_message("No warnings for this user.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"{member.mention} warnings:\n" + "\n".join(warnings), ephemeral=True)
+
+# /clearwarnings
+@bot.tree.command(name="clearwarnings", description="Clear a user's warnings.")
+@has_mod_role()
+async def clearwarnings(interaction: discord.Interaction, member: discord.Member):
+    warn_db[member.id] = []
+    await interaction.response.send_message(f"Warnings for {member.mention} cleared.", ephemeral=True)
+
+# /purge command
+@bot.tree.command(name="purge", description="Deletes a number of messages from a channel.")
+@has_mod_role()
+async def purge(interaction: discord.Interaction, amount: int):
+    await interaction.channel.purge(limit=amount)
+    await interaction.response.send_message(f"Deleted {amount} messages.", ephemeral=True)
+
+# /giverole command
+@bot.tree.command(name="giverole", description="Gives a role to a user.")
+@has_mod_role()
+async def giverole(interaction: discord.Interaction, member: discord.Member, role: discord.Role):
+    await member.add_roles(role)
+    await interaction.response.send_message(f"Gave {role.name} to {member.mention}.", ephemeral=True)
+
+# /edit command
+@bot.tree.command(name="edit", description="Edit the bot's status.")
+@has_mod_role()
+async def edit(interaction: discord.Interaction, status: str):
+    await bot.change_presence(activity=discord.Game(name=status))
+    await interaction.response.send_message("Bot status updated.", ephemeral=True)
+
+# /help command
+@bot.tree.command(name="help", description="List available commands.")
+async def help(interaction: discord.Interaction):
+    commands_list = """
+    `/ban` - Ban a user
+    `/kick` - Kick a user
+    `/warn` - Warn a user
+    `/checkwarnings` - Check user warnings
+    `/clearwarnings` - Clear user warnings
+    `/purge` - Delete messages
+    `/giverole` - Give a role
+    `/edit` - Change bot status
+    `/createembed` - Create an embed message
+    `/reactionroles` - Setup reaction roles
+    `/ticket` - Create a support ticket
+    """
+    await interaction.response.send_message(commands_list, ephemeral=True)
+
+# /createembed
+@bot.tree.command(name="createembed", description="Create an embed in a selected channel.")
+async def createembed(interaction: discord.Interaction, channel: discord.TextChannel, title: str, description: str):
+    embed = discord.Embed(title=title, description=description, color=discord.Color.orange())
+    await channel.send(embed=embed)
+    await interaction.response.send_message(f"Embed sent to {channel.mention}", ephemeral=True)
+
+# /reactionroles
+@bot.tree.command(name="reactionroles", description="Send a message with buttons to give roles.")
+@has_mod_role()
+async def reactionroles(interaction: discord.Interaction, channel: discord.TextChannel, message: str, role1: discord.Role, role2: discord.Role = None):
+    view = discord.ui.View()
+
+    async def give_role(interaction_button: discord.Interaction, role: discord.Role):
+        await interaction_button.user.add_roles(role)
+        await interaction_button.response.send_message(f"Given role: {role.name}", ephemeral=True)
+
+    button1 = discord.ui.Button(label=role1.name, style=discord.ButtonStyle.primary)
+    button1.callback = lambda i: give_role(i, role1)
+    view.add_item(button1)
+
+    if role2:
+        button2 = discord.ui.Button(label=role2.name, style=discord.ButtonStyle.secondary)
+        button2.callback = lambda i: give_role(i, role2)
+        view.add_item(button2)
+
+    await channel.send(content=message, view=view)
+    await interaction.response.send_message("Reaction roles sent.", ephemeral=True)
+
+# /ticket (basic implementation)
+@bot.tree.command(name="ticket", description="Open a support ticket.")
+async def ticket(interaction: discord.Interaction):
+    guild = interaction.guild
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        interaction.user: discord.PermissionOverwrite(view_channel=True),
+        guild.me: discord.PermissionOverwrite(view_channel=True)
+    }
+    ticket_channel = await guild.create_text_channel(name=f"ticket-{interaction.user.name}", overwrites=overwrites)
+    await ticket_channel.send(f"{interaction.user.mention} Thank you for opening a ticket. A staff member will be with you shortly.")
+    await interaction.response.send_message(f"Ticket created: {ticket_channel.mention}", ephemeral=True)
+
+# Run the bot
+bot.run("YOUR_BOT_TOKEN")
 
